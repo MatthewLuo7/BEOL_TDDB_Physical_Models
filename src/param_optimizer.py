@@ -144,15 +144,20 @@ class TwoStageWaferOptimizer:
         
         return val_f
 
-    def run_optimization(self, n_trials: int = 30) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def run_optimization(self, n_trials: int = 30, seed: int = 42) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Launch the Bayesian optimization pipeline and return decoupled result files.
-        启动贝叶斯寻优流水线，并返回两个完全解耦的输出字典（对应两个独立文件）。
+        启动贝叶斯寻优流水线。
         
-        Returns:
-            Tuple[Dict, Dict]: (optimized_config, optimization_metadata)
+        Args:
+            n_trials: 优化的迭代轮数。
+            seed: 随机种子，保证优化轨迹绝对可复现。
         """
-        study = optuna.create_study(direction="maximize")
+        # 🌟 关键修改：显式创建一个带有固定种子的 TPE 采样器
+        sampler = optuna.samplers.TPESampler(seed=seed)
+        
+        # 将采样器注入到 study 中
+        study = optuna.create_study(direction="maximize", sampler=sampler)
         study.optimize(self.objective, n_trials=n_trials)
         
         best_trial_idx = study.best_trial.number
