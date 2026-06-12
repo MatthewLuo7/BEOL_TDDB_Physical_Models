@@ -75,7 +75,7 @@ def build_train_job_and_label(dataset_path):
 					"output_binary_path": None
 				}
 			)
-		class_val_matrix = load_matrix_csv(wafer_path / 'ExistenceClass.csv')
+		class_val_matrix = load_matrix_csv(wafer_path / 'ExistenceClass.csv').astype(np.int32)
 		_, _, class_val, _ = matrix_to_sparse_points(class_val_matrix)
 		labels.append(np.where(class_val == 3, 1, 0))		# 1 or 2: bad chip (0); 3: good chip (1)
 
