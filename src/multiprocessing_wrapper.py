@@ -99,8 +99,7 @@ def _process_and_save_by_path(path_job: Dict[str, Any]) -> Tuple[Optional[np.nda
             dense_binary_matrix = sparse_points_to_matrix(x, y, binary_labels, orig_shape)
             save_matrix_csv(dense_binary_matrix, output_binary_path)
         
-        # Return the in-memory matrices directly / 直接返回全量 2D 矩阵结果供主进程使用
-        return dense_ttf_matrix, dense_binary_matrix
+        return ttf_lifetimes, binary_labels
 
     except Exception as e:
         # Robust error handling: Return None tuple to prevent worker crash and pool hang.

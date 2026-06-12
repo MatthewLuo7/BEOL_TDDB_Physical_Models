@@ -142,7 +142,7 @@ if __name__ == '__main__':
     "pipeline_type": "GPR",
     "M_structures": 1_000_000,
     "F_target": 1e-4,
-    "N_samples_per_dim": 32,
+    "N_samples_per_dim": 8,
     "unit_model_kwargs": {
         "model_type": "GPR",
         "actual_vl_max":40.0,
