@@ -93,8 +93,8 @@ def main():
 	parser.add_argument('--num-workers', type=int, default=4, help='Number of CPUs')
 	parser.add_argument('--save-path', type=str, default=None, help='Output path for training results')
 	args = parser.parse_args()
-
 	if args.pipeline_type == 'GPR': args.model_type = 'GPR'
+	print(args)
 
 	# build job list and label
 	train_jobs, train_labels = build_train_job_and_label(args.training_path)
@@ -113,7 +113,7 @@ def main():
 	}
 	if args.pipeline_type == 'GPR':
 		config["unit_model_kwargs"]["actual_vl_max"] = 40.0
-		config["unit_model_kwargs"]["actual_vl_max"] = 20.0
+		config["unit_model_kwargs"]["actual_ll_max"] = 20.0
 
 	# optimization
 	optimizer = TwoStageWaferOptimizer(
@@ -138,10 +138,10 @@ def main():
 	if not save_path.exists():
 		save_path.mkdir()
 
-	with open(save_path / 'config', "w") as f:
+	with open(save_path / 'config.json', "w") as f:
 		json.dump(optimized_config, f)
 
-	with open(save_path / 'metadata', "w") as f:
+	with open(save_path / 'metadata.json', "w") as f:
 		json.dump(optimization_metadata, f)
 
 	optimizer.plot_history(save_image_path=save_path/'metric_curve.png')
