@@ -57,7 +57,7 @@ class TwoStageWaferOptimizer:
         default_spaces = {
             "M_structures": (100_000, 5_000_000, 100_000),  # low, high, step
             "F_target": (1e-6, 1e-2),                       # low, high
-            "N_samples_per_dim": (1, 20, 1)                 # low, high, step
+            "N_samples_per_dim": (1, 16, 1)                 # low, high, step
         }
         if search_spaces:
             default_spaces.update(search_spaces)
