@@ -3,9 +3,10 @@
 
 **/gen_data/
 **/data/
-**/datasets/
 **/test_data/
 **/output/
 
 **/logs/
 **/log/
+
+**/do_not_upload/

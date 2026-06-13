@@ -1,13 +1,16 @@
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import argparse
 import json
 import numpy as np
 from pathlib import Path
 from typing import List, Dict
-
-import matplotlib.pyplot as plt
-from matplotlib.patches import Circle, Rectangle, Patch
-from matplotlib.colors import LogNorm
-import matplotlib.cm as cm
+import multiprocessing
 
 from train import find_all_wafer_paths
 from src.multiprocessing_wrapper import batch_process_by_path
@@ -15,7 +18,7 @@ from src.csv_utils import (
 	load_matrix_csv,
 	matrix_to_sparse_points,
 	)
-from test_scripts.wafer_plot import create_wafer_mask, draw_die_grid, perform_gpr
+from src.plot_utils.inference_wafer_maps import plot_five_trends
 
 
 def generate_and_create_mirrored_paths(data_in: str, data_out: str) -> List[Dict[str, str]]:
@@ -102,166 +105,46 @@ def build_test_job_and_label(data_in_path, data_out_path):
 
     return job_list, labels
 
-def plot_five_trends(
-    x_die, 
-    y_die, 
-    vl_val, 
-    ll_val, 
-    t_scores, 
-    y_true,          
-    y_pred,          
-    title='Wafer Spatial Trends, Lifetime & Binary Classification',
-    cmap='turbo',
-    output_path=None,
-    use_log_scale_for_t=True
-):
+
+def plot_wafer_worker(job_kwargs: dict) -> str:
     """
-    绘制晶圆综合分析图 (2行3列布局)：
-    - [0, 0] / [0, 1]：Space 和 MS 的连续 GPR 空间趋势插值图
-    - [0, 2]：预测寿命 t 的矢量方格连续图
-    - [1, 0]：真实好/坏芯片分类图 (Per-Die 矢量方格) -> 0画冷色, 1画暖色
-    - [1, 1]：模型预测好/坏分类图 (Per-Die 矢量方格) -> 0画冷色, 1画暖色
-    - [1, 2]：留空隐藏 (保持版面整洁)
-    """
-    # --------------------------------------------------------
-    # 1. 工艺尺寸 vl 和 ll 的连续空间 GPR 插值
-    # --------------------------------------------------------
-    print("Performing GPR for Space (vl)...")
-    xx, yy, zz_vl, _ = perform_gpr(x_die, y_die, vl_val)
+    Independent worker function for parallel plotting.
+    用于并行绘图的独立工作函数。
     
-    print("Performing GPR for MS (ll)...")
-    _, _, zz_ll, _ = perform_gpr(x_die, y_die, ll_val)
-
-    # --------------------------------------------------------
-    # 2. 晶圆掩膜 (仅用于 GPR 连续插值图)
-    # --------------------------------------------------------
-    valid_distance = np.sqrt(x_die**2 + y_die**2)
-    wafer_radius = valid_distance.max()
-
-    wafer_mask = create_wafer_mask(xx + 0.5, yy + 0.5, wafer_radius)
-    zz_vl = np.where(wafer_mask, zz_vl, np.nan)
-    zz_ll = np.where(wafer_mask, zz_ll, np.nan)
-
-    # --------------------------------------------------------
-    # 3. 画布布局初始化 (🌟 更改为 2 行 3 列)
-    # --------------------------------------------------------
-    # figsize 从 (28, 5.5) 改为 (18, 11) 以适应 2x3 的纵横比
-    fig, axes = plt.subplots(2, 3, figsize=(18, 11))
-    fig.suptitle(title, fontsize=18, fontweight='bold', y=1.02)
-
-    # 提取当前 cmap 的两端颜色用于好坏标签图
-    colormap_ref = cm.get_cmap(cmap)
-    color_bad = colormap_ref(0.0)   # 坏芯片颜色 (极小值/冷色)
-    color_good = colormap_ref(1.0)  # 好芯片颜色 (极大值/暖色)
-
-    # 辅助函数：绘制连续趋势子图 (GPR)
-    def draw_gpr_subplot(ax, zz_data, subplot_title, cbar_label):
-        image = ax.imshow(
-            zz_data,
-            extent=[xx.min(), xx.max(), yy.min(), yy.max()],
-            origin='lower',
-            cmap=cmap,
-            aspect='equal'
+    Args:
+        job_kwargs (dict): A dictionary containing all necessary data for one wafer.
+                           包含单个晶圆所有绘图所需数据的字典。
+    """
+    idx = job_kwargs['idx']
+    try:
+        # 1. 独立加载数据 / Load data independently in the child process
+        vl_matrix = load_matrix_csv(job_kwargs['vl_path'])
+        ll_matrix = load_matrix_csv(job_kwargs['ll_path'])
+        
+        # 2. 转换为稀疏点 / Convert to sparse points
+        x, y, vl_val, _ = matrix_to_sparse_points(vl_matrix)
+        _, _, ll_val, _ = matrix_to_sparse_points(ll_matrix)
+        
+        # 3. 执行重型绘图任务 / Execute the heavy plotting function
+        plot_five_trends(
+            x_die=x, 
+            y_die=y, 
+            vl_val=vl_val,
+            ll_val=ll_val, 
+            t_scores=job_kwargs['ttf_res'], 
+            y_true=job_kwargs['test_label'],
+            y_pred=job_kwargs['label_res'],
+            title='Wafer Spatial Trends, Lifetime & Binary Classification',
+            cmap='turbo',
+            output_path=job_kwargs['output_image_path'],
+            use_log_scale_for_t=True
         )
-        draw_die_grid(ax, int(x_die.min()), int(x_die.max()), int(y_die.min()), int(y_die.max()))
-        wafer_circle = Circle((-0.5, -0.5), wafer_radius, fill=False, color='black', linewidth=2)
-        ax.add_patch(wafer_circle)
+        return f"[Success] Wafer {idx} plotted successfully."
         
-        ax.scatter(x_die, y_die, c='black', s=5, alpha=0.5)
-        ax.set_title(subplot_title, fontsize=14)
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        cbar = fig.colorbar(image, ax=ax, shrink=0.75)
-        cbar.set_label(cbar_label)
+    except Exception as e:
+        # 捕获异常防止单个晶圆的数据错误导致整个进程池崩溃
+        return f"[Error] Failed on Wafer {idx}: {str(e)}"
 
-    # 🌟 [第一行] 图1、图2、图3
-    # 图1：Space (vl)
-    draw_gpr_subplot(axes[0, 0], zz_vl, 'Space (vl) Spatial Trend\n(GPR Continuous)', 'Space Measurement (nm)')
-
-    # 图2：MS (ll)
-    draw_gpr_subplot(axes[0, 1], zz_ll, 'MS (ll) Spatial Trend\n(GPR Continuous)', 'MS Measurement (nm)')
-
-    # 图3：预测寿命 t (矢量矩形块连续图)
-    ax_t = axes[0, 2]
-    norm = LogNorm(vmin=np.nanmin(t_scores), vmax=np.nanmax(t_scores)) if use_log_scale_for_t else plt.Normalize(vmin=np.nanmin(t_scores), vmax=np.nanmax(t_scores))
-    mapper = cm.ScalarMappable(norm=norm, cmap=cmap)
-    
-    for x, y, score in zip(x_die, y_die, t_scores):
-        if np.isfinite(score):
-            rect = Rectangle(
-                xy=(x - 0.5, y - 0.5),
-                width=1.0, height=1.0,
-                facecolor=mapper.to_rgba(score),
-                edgecolor='none', zorder=2
-            )
-            ax_t.add_patch(rect)
-
-    ax_t.set_xlim(xx.min(), xx.max())
-    ax_t.set_ylim(yy.min(), yy.max())
-    draw_die_grid(ax_t, int(x_die.min()), int(x_die.max()), int(y_die.min()), int(y_die.max()))
-    ax_t.add_patch(Circle((-0.5, -0.5), wafer_radius, fill=False, color='black', linewidth=2))
-    ax_t.set_title('Predicted Lifetime (t)\n(Per-Die Vector Grid)', fontsize=14)
-    ax_t.set_xlabel('X')
-    ax_t.set_ylabel('Y')
-    ax_t.set_aspect('equal')
-    cbar = fig.colorbar(mapper, ax=ax_t, shrink=0.75)
-    cbar.set_label('Reliability Lifetime Score (t)')
-
-    # --------------------------------------------------------
-    # 🌟 新增辅助函数：用于绘制二分类标签图
-    # --------------------------------------------------------
-    def draw_binary_label_subplot(ax, labels, subplot_title):
-        for x, y, label in zip(x_die, y_die, labels):
-            if np.isfinite(label):
-                current_color = color_bad if int(label) == 0 else color_good
-                rect = Rectangle(
-                    xy=(x - 0.5, y - 0.5), 
-                    width=1.0, height=1.0,
-                    facecolor=current_color,
-                    edgecolor='none',
-                    zorder=2
-                )
-                ax.add_patch(rect)
-                
-        ax.set_xlim(xx.min(), xx.max())
-        ax.set_ylim(yy.min(), yy.max())
-        draw_die_grid(ax, int(x_die.min()), int(x_die.max()), int(y_die.min()), int(y_die.max()))
-        ax.add_patch(Circle((-0.5, -0.5), wafer_radius, fill=False, color='black', linewidth=2))
-        ax.set_title(subplot_title, fontsize=14)
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_aspect('equal')
-        
-        # 绘制离散型图例
-        legend_elements = [
-            Patch(facecolor=color_bad, edgecolor='black', label='Bad Die (0 / Intercept)'),
-            Patch(facecolor=color_good, edgecolor='black', label='Good Die (1 / Pass)')
-        ]
-        ax.legend(handles=legend_elements, loc='upper right', fontsize=9, framealpha=0.8)
-
-    # 🌟 [第二行] 图4、图5、以及隐藏的空图
-    # 图4：真实标签
-    draw_binary_label_subplot(axes[1, 0], y_true, 'Ground Truth Reliability\n(Binary Labels)')
-
-    # 图5：预测标签
-    draw_binary_label_subplot(axes[1, 1], y_pred, 'Model Predicted Decision\n(Binary Classification)')
-
-    # 图6：彻底隐藏不需要的右下角空坐标轴
-    axes[1, 2].axis('off')
-
-    # --------------------------------------------------------
-    # 4. 调整间距与保存
-    # --------------------------------------------------------
-    fig.tight_layout(w_pad=2.0, h_pad=2.0)
-
-    if output_path is not None:
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output_path, dpi=300, bbox_inches='tight')
-        print(f'Saved to: {output_path}')
-        plt.close(fig)
-    else:
-        plt.show()
 
 def main():
     parser = argparse.ArgumentParser(description='Inference')
@@ -313,25 +196,57 @@ def main():
         num_workers=args.num_workers,
     )
 
+    # job_path = generate_and_create_mirrored_paths(args.test_path, args.save_path)
+    # for idx, (ttf_res, label_res) in enumerate(results):
+    #     vl_matrix = load_matrix_csv(test_jobs[idx]['vl_path'])
+    #     ll_matrix = load_matrix_csv(test_jobs[idx]['ll_path'])
+    #     x, y, vl_val, _ = matrix_to_sparse_points(vl_matrix)
+    #     _, _, ll_val, _ = matrix_to_sparse_points(ll_matrix)
+
+    #     plot_five_trends(
+    #         x, 
+    #         y, 
+    #         vl_val,
+    #         ll_val, 
+    #         ttf_res, 
+    #         test_labels[idx],
+    #         label_res,
+    #         title='Wafer Spatial Trends, Lifetime & Binary Classification',
+    #         cmap='turbo',
+    #         output_path=job_path[idx][1] / 'wafer_maps.png',
+    #         use_log_scale_for_t=True)
+
+
+    plot_jobs = []
     job_path = generate_and_create_mirrored_paths(args.test_path, args.save_path)
     for idx, (ttf_res, label_res) in enumerate(results):
-        vl_matrix = load_matrix_csv(test_jobs[idx]['vl_path'])
-        ll_matrix = load_matrix_csv(test_jobs[idx]['ll_path'])
-        x, y, vl_val, _ = matrix_to_sparse_points(vl_matrix)
-        _, _, ll_val, _ = matrix_to_sparse_points(ll_matrix)
-
-        plot_five_trends(
-            x, 
-            y, 
-            vl_val,
-            ll_val, 
-            ttf_res, 
-            test_labels[idx],
-            label_res,
-            title='Wafer Spatial Trends, Lifetime & Binary Classification',
-            cmap='turbo',
-            output_path=job_path[idx][1] / 'wafer_maps.png',
-            use_log_scale_for_t=True)
+        base_out_dir = Path(job_path[idx][1]) 
+        output_img = str(base_out_dir / 'wafer_maps.png')
+        job_dict = {
+            'idx': idx,
+            'vl_path': test_jobs[idx]['vl_path'],
+            'll_path': test_jobs[idx]['ll_path'],
+            'ttf_res': ttf_res,
+            'test_label': test_labels[idx],
+            'label_res': label_res,
+            'output_image_path': output_img
+        }
+        plot_jobs.append(job_dict)
+        pool = multiprocessing.Pool(processes=args.num_workers, maxtasksperchild=10)
+    
+    try:
+        completed_results = pool.imap(plot_wafer_worker, plot_jobs, chunksize=1)     
+        for i, msg in enumerate(completed_results):
+            print(f"[{i+1}/{len(plot_jobs)}] {msg}")
+            
+    except KeyboardInterrupt:
+        print("\n[Warning] Caught Ctrl+C! Terminating all plotting processes...")
+        pool.terminate()
+        
+    finally:
+        pool.close()
+        pool.join()
+        print("\n🎉 All wafer plotting jobs finished successfully.")
 
 
 if __name__ == "__main__":
